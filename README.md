@@ -12,7 +12,7 @@ Story builder group game via SMS
 * Once every player has responded to every other story-starter, finish
 * Send group text with everyone's name or a bunch of links? (must be formatted). Or a webpage with all the links
 * You can listen and vote from text. (twilio doesn't accept messages from group text?
-* After voting, send group text message with link to save the recording to google drive.
+* After voting, send group text message with link to save the recording to google drive. VIP gets the data to paste into the group message.
 
 Doesn't look like twilio does group sms: https://stackoverflow.com/questions/26690403/twilio-sms-facilitating-a-group-sms
 
