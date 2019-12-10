@@ -19,3 +19,5 @@ Doesn't look like twilio does group sms: https://stackoverflow.com/questions/266
 any way to start a new group text? send all the numbers to VIP and have them start it? shortcut to send to all those numbers? start from email? 
 
 in a group setting maybe everyone gets a different persons story to read.
+
+add random music behind the polly audio.
