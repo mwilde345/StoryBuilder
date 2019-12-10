@@ -17,3 +17,5 @@ Story builder group game via SMS
 Doesn't look like twilio does group sms: https://stackoverflow.com/questions/26690403/twilio-sms-facilitating-a-group-sms
 
 any way to start a new group text? send all the numbers to VIP and have them start it? shortcut to send to all those numbers? start from email? 
+
+in a group setting maybe everyone gets a different persons story to read.
