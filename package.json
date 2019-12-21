@@ -1,0 +1,22 @@
+{
+  "name": "story-builder",
+  "version": "1.0.0",
+  "description": "",
+  "main": "handler.js",
+  "dependencies": {
+    "aws-sdk": "^2.595.0",
+    "dynamodb": "^1.2.1",
+    "serverless": "^1.60.0",
+    "sqs-consumer": "^5.4.0",
+    "sqs-producer": "^1.6.3",
+    "twilio": "^3.39.1"
+  },
+  "devDependencies": {
+    "serverless-dotenv-plugin": "^2.1.1"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC"
+}
