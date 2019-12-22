@@ -1,5 +1,5 @@
 const dynamo = require('dynamodb');
-https://www.npmjs.com/package/dynamodb
+// https://www.npmjs.com/package/dynamodb
 const Joi = require('@hapi/joi');
 
 export async function getPlayer(params) {
@@ -26,7 +26,7 @@ export async function updatePlayer(params) {
 }
 
 export async function getStory(params) {
-    Story.get(roomCode, starter, { ConsistentRead: true }, (err, story) => {
+    Story.get(params.roomCode, params.starter, { ConsistentRead: true }, (err, story) => {
         return Promise.resolve(story);
     });
     // Account.get('test@example.com', {ConsistentRead: true, AttributesToGet : ['name','age']}, function (err, acc) {
@@ -63,7 +63,7 @@ export async function updateStory(params) {
 
 export async function getRoom(params) {
     return Room
-        .query(roomCode)
+        .query(params.roomCode)
         .descending()
         .exec((rooms) => {
             let sorted = rooms.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));

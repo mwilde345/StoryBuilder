@@ -1,8 +1,5 @@
 const AWS = require('aws-sdk');
-const lambda = new AWS.Lambda();
 const { Consumer } = require('sqs-consumer');
-const snsTopic = process.env.SNS_TOPIC;
-const snsArn = process.env.SNS_TOPIC_ARN;
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require('twilio')(accountSid, authToken);
@@ -10,7 +7,9 @@ const dynamoClient = require('./dynamo');
 
 async function main(event, context) {
     const roomCode = event.roomCode;
-
+    let roomMessages = []
+    let start = new Date();
+    let end = new Date(start.setSeconds(start.getSeconds() + event.timeLimit));
     const app = Consumer.create({
         queueUrl: process.env.MESSAGES_QUEUE_URL,
         handleMessage: async (message) => {
@@ -30,7 +29,6 @@ async function main(event, context) {
                 } else if (message.type === 'join') {
                     let { From, randomName } = message;
                     const room = await dynamoClient.getRoom(roomCode);
-                    const players = room.get('players')
                     const vip = room.get('vip');
                     if (From===vip) {
                         app.stop();
@@ -68,11 +66,11 @@ async function main(event, context) {
         console.error(err.message);
     });
 
-    app.on('message_received', (message) => {
-        // what data does this event give?
-    })
+    // app.on('message_received', (message) => {
+    //     // what data does this event give?
+    // })
     app.start();
-};
+}
 
 // players: [{number: 123, name: asdf, order: 1}] from rooms object
 // roomMessages: [{twilio message}]
@@ -112,7 +110,7 @@ async function sendSMS(body, to) {
     return client.messages
         .create({ body, from: process.env.TWILIO_NUMBER, to })
         .then(message => {
-            return Promise.resolve()
+            return Promise.resolve(message)
         });
 }
 

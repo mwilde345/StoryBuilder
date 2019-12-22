@@ -1,5 +1,5 @@
 // https://stackoverflow.com/questions/56071239/save-aws-polly-mp3-file-to-s3
-
+'use strict';
 // Load the SDK
 const AWS = require('aws-sdk')
 const Fs = require('fs')

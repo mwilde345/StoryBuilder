@@ -10,6 +10,7 @@ const randomWords = require('random-words');
 const MessagingResponse = require('twilio').twiml.MessagingResponse;
 const AWS = require('aws-sdk');
 const lambda = new AWS.Lambda();
+const s3 = new AWS.S3();
 const POLLER_LAMBDA = process.env.POLLER_LAMBDA
 const SQSProducer = require('sqs-producer');
 // create simple producer
@@ -115,21 +116,40 @@ async function endRound(record) {
         // remove currentRoom from all the players
         await players.forEach(async player => {
             let { number } = player;
-            let playerObj = await dynamoClient.getPlayer({ number });
+            // let playerObj = await dynamoClient.getPlayer({ number });
             await dynamoClient.updatePlayer({ number, currentRoom: null });
         })
         // generate voice. Upload it and text to s3. Send the links to each player
         await stories.forEach(async story => {
             const text = story.get('text');
             const starter = story.get('starter');
+            await textToS3(text, starter, roomCode);
             return await toSpeech(text, starter, roomCode);
             // update s3Link in the 'voice' function
         })
     } else {
-        return dynamoClient.updateRoom({
+        let room = await dynamoClient.updateRoom({
             roomCode, startTime: room.startTime, currentRound: { $add: 1 }
         })
+        return invokeLambda(roomCode, players, room.get('timeLimit'))
     }
+}
+
+async function textToS3(text, starter, roomCode) {
+    const params = {
+        Bucket: process.env.S3_BUCKET,
+        Key: `${roomCode}/text/${starter}.txt`, // File name you want to save as in S3
+        Body: text
+    };
+
+    // Uploading files to the bucket
+    s3.upload(params, function(err, data) {
+        if (err) {
+            return Promise.reject(err);
+        }
+        console.log(`File uploaded successfully. ${data.Location}`);
+        return Promise.resolve(data.Location);
+    });
 }
 
 async function newGame(vip) {
@@ -158,7 +178,7 @@ async function newGame(vip) {
     await sendSMS(vip, `Your name is ${randomName}. Change your name by responding with: 'Name, my cool name'.`)
     await sendSMS(vip, `When all players have joined, respond 'Ready'.`)
     // start listening for join sqs events
-    return invokeLambda(roomCode, players, timeLimit)
+    return invokeLambda(roomCode, players, 0)
 }
 
 function makeid(length) {
@@ -218,6 +238,7 @@ async function ready(event) {
 }
 
 async function response(event) {
+    // TODO: restrict response character length in case of copy-paste abuse and polly costs
     let message = event.Body;
     let From = event.From;
     const player = await dynamoClient.updatePlayer({ number: From, lastResponse: message });

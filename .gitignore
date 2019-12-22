@@ -1,0 +1,7 @@
+.env
+package-lock.json
+twilio-event.json
+sns-event.json
+polly-s3-event.json
+!.eslintrc.js
+!.gitignore
