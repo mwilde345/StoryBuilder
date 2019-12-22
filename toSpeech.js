@@ -12,7 +12,7 @@ const Polly = new AWS.Polly({
 
 const names = ['Aditi','Amy','Astrid','Bianca','Brian','Camila','Carla','Carmen','Celine','Chantal','Conchita','Cristiano','Dora','Emma','Enrique','Ewa','Filiz','Geraint','Giorgio','Gwyneth','Hans','Ines','Ivy','Jacek','Jan','Joanna','Joey','Justin','Karl','Kendra','Kimberly','Lea','Liv','Lotte','Lucia','Lupe','Mads','Maja','Marlene','Mathieu','Matthew','Maxim','Mia','Miguel','Mizuki','Naja','Nicole','Penelope','Raveena','Ricardo','Ruben','Russell','Salli','Seoyeon','Takumi','Tatyana','Vicki','Vitoria','Zeina','Zhiy']
 
-export default async function main(text) {
+export default async function main(text, number, roomCode) {
     let name = names[Math.floor(Math.random() * names.length)];
     let params = {
         // TODO: try ssml!
@@ -20,12 +20,13 @@ export default async function main(text) {
         'OutputFormat': 'mp3',
         'VoiceId': name,
         OutputS3BucketName: process.env.S3_BUCKET,
-        OutputS3KeyPrefix: `${number}/${roomCode}/`,
-        SnsTopicArn: process.env.VOICE_SNS_TOPIC
+        OutputS3KeyPrefix: `${roomCode}/voice/${number.replace('+','')}`,
+        SnsTopicArn: process.env.SNS_TOPIC_ARN
     }
 
-    Polly.startSpeechSynthesisTask(params, (err, data) => {
+    return Polly.startSpeechSynthesisTask(params, (err, data) => {
        console.log('done');
+       return Promise.resolve(data)
     })
 }
 

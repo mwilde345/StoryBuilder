@@ -4,8 +4,11 @@
   "description": "",
   "main": "handler.js",
   "dependencies": {
+    "@hapi/joi": "^16.1.8",
+    "@mapbox/s3urls": "^1.5.3",
     "aws-sdk": "^2.595.0",
     "dynamodb": "^1.2.1",
+    "random-words": "^1.1.0",
     "serverless": "^1.60.0",
     "sqs-consumer": "^5.4.0",
     "sqs-producer": "^1.6.3",

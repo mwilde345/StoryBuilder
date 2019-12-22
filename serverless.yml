@@ -40,10 +40,11 @@ provider:
     PLAYERS_DB: ${env:PLAYERS_DB}
     ROOMS_DB: ${env:ROOMS_DB}
     STORIES_DB: ${env:STORIES_DB}
-    ROUND_SNS_TOPIC: ${env:ROUND_SNS_TOPIC}
-    VOICE_SNS_TOPIC: ${env:VOICE_SNS_TOPIC}
+    SNS_TOPIC: ${env:SNS_TOPIC}
+    SNS_TOPIC_ARN: ${env:SNS_TOPIC_ARN}
     MESSAGES_QUEUE: ${env:MESSAGES_QUEUE}
     MESSAGES_QUEUE_URL: ${env:MESSAGES_QUEUE_URL}
+    TWILIO_NUMBER: ${env:TWILIO_NUMBER}
 
 # you can add statements to the Lambda function's IAM Role here
 #  iamRoleStatements:
@@ -104,9 +105,7 @@ functions:
 #      - websocket: $connect
 #      - s3: ${env:BUCKET}
 #      - schedule: rate(10 minutes)
-      - sns:
-        - ${self:provider.environment.ROUND_SNS_TOPIC}
-        - ${self:provider.environment.VOICE_SNS_TOPIC}
+      - sns: ${self:provider.environment.SNS_TOPIC}
 #      - stream: arn:aws:dynamodb:region:XXXXXX:table/foo/stream/1970-01-01T00:00:00.000
 #      - alexaSkill: amzn1.ask.skill.xx-xx-xx-xx
 #      - alexaSmartHome: amzn1.ask.skill.xx-xx-xx-xx
