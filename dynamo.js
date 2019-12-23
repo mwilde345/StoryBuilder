@@ -1,34 +1,57 @@
 const dynamo = require('dynamodb');
 // https://www.npmjs.com/package/dynamodb
-const Joi = require('@hapi/joi');
+// const Joi = require('@hapi/joi');
+const Joi = require('joi');
 
 export async function getPlayer(params) {
-    return Player.query(params.number)
-        .exec();
+    return new Promise((res, rej) => {
+        return Player.get(params.number, {ConsistentRead: true}, (err, player) => {
+            if (err) {
+                console.log('Error putting player ' + params.number);
+                return rej(err)
+            } else {
+                console.log('Put player ' + params.number);
+                return res(player);
+            }
+        })
+    })
 }
 
 export async function putPlayer(params) {
-    Player.create(params, (err) => {
-        if (err) {
-            console.log('Error putting player ' + params.number);
-            return Promise.reject(err)
-        } else {
-            console.log('Put player ' + params.number);
-            return Promise.resolve(params.number);
-        }
+    return new Promise((res, rej) => {
+        Player.create(params, (err, player) => {
+            if (err) {
+                console.log('Error putting player ' + params.number);
+                return rej(err)
+            } else {
+                console.log('Put player ' + params.number);
+                return res(player);
+            }
+        })
     })
 }
 
 export async function updatePlayer(params) {
-    Player.update(params, (err, player) => {
-        return Promise.resolve(player);
+    return new Promise((res, rej) => {
+        Player.update(params, (err, player) => {
+            if (err) {
+                console.log('Error putting player ' + params.number);
+                return rej(err)
+            } else {
+                console.log('Put player ' + params.number);
+                return res(player);
+            }
+        })
     })
 }
 
 export async function getStory(params) {
-    Story.get(params.roomCode, params.starter, { ConsistentRead: true }, (err, story) => {
-        return Promise.resolve(story);
-    });
+    return new Promise((res, rej) => {
+        Story.get(params.roomCode, params.starter, { ConsistentRead: true }, (err, story) => {
+            if(err) return rej(story)
+            return res(story);
+        });
+    })
     // Account.get('test@example.com', {ConsistentRead: true, AttributesToGet : ['name','age']}, function (err, acc) {
     //     console.log('got account', acc.get('email'))
     //     console.log(acc.get('name'));
@@ -42,44 +65,62 @@ export async function getStory(params) {
 }
 
 export async function getStoriesForRoom(params) {
-    return Story.query(params.roomCode)
-        .loadAll()
-        .exec((err, stories) => {
-            return Promise.resolve(stories)
-        })
+    return new Promise((res, rej) => {
+        return Story.query(params.roomCode)
+            .loadAll()
+            .exec((err, stories) => {
+                if (err) return rej(err)
+                return res(stories.Items)
+            })     
+    })
 }
 
 export async function putStory(params) {
-    return Story.create(params, (err, story) => {
-        return Promise.resolve(story)
+    return new Promise((res, rej) => {
+        return Story.create(params, (err, story) => {
+            if (err) return rej(err)
+            return res(story)
+        })
     })
 }
 
 export async function updateStory(params) {
-    return Story.update(params, (err, story) => {
-        return Promise.resolve(story)
+    return new Promise((res, rej) => {
+        return Story.update(params, (err, story) => {
+            if (err) return rej(err)
+            return res(story)
+        })
     })
 }
 
-export async function getRoom(params) {
-    return Room
-        .query(params.roomCode)
-        .descending()
-        .exec((rooms) => {
-            let sorted = rooms.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-            return Promise.resolve(sorted[0])
-        })
+export async function getRoom(roomCode) {
+    return new Promise((res, rej) => {
+        return Room
+            .query(roomCode.toUpperCase())
+            .descending()
+            .exec((err, rooms) => {
+                if (err) return rej(err)
+                let sorted = rooms.Items.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+                return res(sorted[0])
+            })
+    })
 }
 
 export async function putRoom(params) {
-    return Room.create(params, (err, room) => {
-        return Promise.resolve(room);
+    return new Promise((res, rej) => {
+        return Room.create(params, (err, room) => {
+            if (err) return rej(err)
+            return res(room);
+        })
     })
 }
 
 export async function updateRoom(params) {
-    return Room.update(params, (err, room) => {
-        return Promise.resolve(room);
+    return new Promise((res, rej) => {
+        return Room.update(params, (err, room) => {
+            if (err) return rej(err)
+            return res(room);
+        })
     })
     // Account.update({ email: 'foo@example.com', age: { $add: 1 } }, function (err, acc) {
     //     console.log('incremented age by 1', acc.get('age'));
@@ -97,12 +138,12 @@ export async function updateRoom(params) {
 export const Player = dynamo.define('Player', {
     hashKey: 'number',
     timestamps: true,
-    schema: {
+    schema: Joi.object({
         number: Joi.string(),
         currentRoom: Joi.string(),
         roomHistory: dynamo.types.stringSet(),
         lastResponse: Joi.string()
-    },
+    }),
     tableName: process.env.PLAYERS_DB
 })
 
@@ -120,7 +161,9 @@ export const Room = dynamo.define('Room', {
             Joi.object({
                 number: Joi.string(),
                 name: Joi.string(),
-                order: Joi.number()
+                order: Joi.number(),
+                lastResponseRound: Joi.number(),
+                lastResponse: Joi.string()
             })),
         isReady: Joi.boolean()
     },

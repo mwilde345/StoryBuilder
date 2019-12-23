@@ -5,3 +5,4 @@ sns-event.json
 polly-s3-event.json
 !.eslintrc.js
 !.gitignore
+*.json

@@ -4,103 +4,126 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = require('twilio')(accountSid, authToken);
 const dynamoClient = require('./dynamo');
+const sqs = new AWS.SQS({ apiVersion: '2012-11-05' })
+const randomWords = require('random-words');
 
 async function main(event, context) {
-    const roomCode = event.roomCode;
-    let roomMessages = []
-    let start = new Date();
-    let end = new Date(start.setSeconds(start.getSeconds() + event.timeLimit));
-    const app = Consumer.create({
-        queueUrl: process.env.MESSAGES_QUEUE_URL,
-        handleMessage: async (message) => {
-            // check if it's for our room
-            // if it is, handle it, then check if it was the last one
-            // if it was the last one, send sns
-            let shouldHandle = message.roomCode === roomCode;
-            if (shouldHandle) {
-                if (message.type === 'response') {
-                    roomMessages.push(message);
-                    let shouldStop = (new Date() >= end) || (roomMessages.length === event.players.length)
-                    if (shouldStop) {
-                        app.stop();
-                        await handleMessages(roomMessages, event.players, roomCode);
-                        return sendSNS(roomCode)
+    console.log('in poller', event);
+
+    return new Promise((res, rej) => {
+        console.log('in promise')
+        if ("Records" in event) {
+            let messages = event.Records;
+            messages.forEach(async record => {
+                console.log('doing record ', record)
+                let receiptHandle = record.receiptHandle;
+                console.log('body here ', record.body);
+                let body = JSON.parse(record.body);
+                console.log('parsed ', body);
+                let { roomCode, From, type } = body;
+                let room = await dynamoClient.getRoom(roomCode);
+                console.log('room', room)
+                let randomName = randomWords(1)[0];
+                if (type === 'response') {
+                    let updatedRoom = await handleResponse(room, From, body.Body);
+                    let playersRemaining = updatedRoom.get('players').filter(player => {
+                        return player.lastResponseRound < room.get('currentRound')
+                    })
+                    if (!playersRemaining.length) {
+                        await handleEndOfRound(room);
                     }
-                } else if (message.type === 'join') {
-                    let { From, randomName } = message;
-                    const room = await dynamoClient.getRoom(roomCode);
+                    res(deleteMessage(receiptHandle));
+                } else if (type === 'join') {
+                    console.log('in join')
                     const vip = room.get('vip');
-                    if (From===vip) {
-                        app.stop();
-                        await dynamoClient.updateRoom({
-                            isReady: true
-                        });
-                        return Promise.resolve();
+                    if (From === vip) {
+                        console.log('it from vip')
+                        let snsResult = await sendSNS(roomCode, []);
+                        console.log('sns res ', snsResult);
+                        return res(deleteMessage(receiptHandle));
                     } else {
-                        await dynamoClient.updateRoom({
-                            roomCode,
-                            players: {
-                                $add: {
-                                    number: From,
-                                    name: randomName
-                                }
-                            }
+                        console.log('updating room')
+                        let updatedPlayers = room.get('players');
+                        updatedPlayers.push({
+                            number: From,
+                            name: randomName,
+                            order: room.get('players').length + 1,
+                            lastResponseRound: room.get('currentRound')
                         })
+                        let updatedRoom = await dynamoClient.updateRoom({
+                            roomCode,
+                            startTime: room.get('startTime'),
+                            players: updatedPlayers
+                        })
+                        console.log('updated room ', updatedRoom)
                         await sendSMS(`${From} has joined as ${randomName}!`, vip);
-                        return Promise.resolve();
+                        console.log('sent sms')
                     }
+                    console.log('deleting message');
+                    return res(deleteMessage(receiptHandle));
                 } else {
-                    return Promise.reject('Bad message type');
+                    return rej('Bad message type');
                 }
-            } else {
-                return Promise.reject('Message not for given room:' + roomCode);
-            }
+            })
+
+        } else {
+            return rej('invalid message ', event);
         }
-    });
-
-    app.on('error', (err) => {
-        console.error(err.message);
-    });
-
-    app.on('processing_error', (err) => {
-        console.error(err.message);
-    });
-
-    // app.on('message_received', (message) => {
-    //     // what data does this event give?
-    // })
-    app.start();
+    })
 }
 
-// players: [{number: 123, name: asdf, order: 1}] from rooms object
-// roomMessages: [{twilio message}]
-async function handleMessages(roomMessages, players, roomCode) {
-    let playerCount = players.length;
-    let stories = await dynamoClient.getStoriesForRoom({ roomCode });
-    let updatedStories = [];
-    // auto-generate responses for left out players
-    let latePlayers = players.filter(player => {
-        return !(roomMessages.map(message => message.From).includes(player.number))
-    })
-    latePlayers.forEach(player => {
-        // autoFill late players
-        roomMessages.push({
-            From: player.number,
-            Body: 'Auto generated text.'
-        })
-    })
-    await roomMessages.forEach(async (message) => {
-        // find out which texts go where and send them
-        let currentPlayer = players.find(player => player.number === message.From);
-        let nextPlayer = players.find(player => player.order === (currentPlayer.order + 1) % playerCount);
-        let currentStory = stories.find(story => story.get('starter') === message.From);
-        let updatedStory = await dynamoClient.updateStory({
-            roomCode: currentStory.roomCode,
-            starter: currentStory.starter,
-            text: { $add: message.Body }
+async function deleteMessage(id) {
+    var params = {
+        QueueUrl: process.env.MESSAGES_QUEUE_URL,
+        ReceiptHandle: id
+    };
+    return new Promise((res, rej) => {
+        sqs.deleteMessage(params, function (err, data) {
+            if (err) rej(err, err.stack); // an error occurred
+            else res(data)         // successful response
         });
-        updatedStories.push(updatedStory);
-        return sendSMS(message.Body, nextPlayer.number);
+    })
+}
+
+async function handleResponse(room, From, Body) {
+    let roomCode = room.get('roomCode');
+    let players = room.get('players');
+    let currentStory = await dynamoClient.getStory({
+        roomCode,
+    })
+    let updatedPlayers = players.map(player => {
+        if (player.number === From) {
+            return {
+                ...player,
+                lastResponseRound: room.get('currentRound'),
+                lastResponse: Body
+            }
+        } else return player
+    })
+    return dynamoClient.updateRoom({ roomCode, players: updatedPlayers, startTime: room.get('startTime') });
+}
+
+async function handleEndOfRound(room) {
+    let roomCode = room.get('roomCode');
+    let stories = await dynamoClient.getStoriesForRoom({ roomCode: roomCode.toUpperCase() });
+    let updatedStories = [];
+    let playerCount = players.length;
+    let players = room.get('players');
+    //  TODO: auto-generate responses for left out players
+    players.forEach(async player => {
+        let nextPlayer = players.find(nestedPlayer => nestedPlayer.order
+            === (player.order + 1));
+        let currentStoryOwner = players.find(nestedPlayer => nestedPlayer.order
+            === (playerCount - Math.abs(player.order - room.get('currentRound'))))
+        // todo: wrong
+        let currentStory = stories.find(story => story.get('starter') === currentStoryOwner.number);
+        let updatedStory = await dynamoClient.updateStory({
+            roomCode: currentStory.get('roomCode'),
+            starter: currentStory.get('starter'),
+            text: currentStory.get('text') + '\n' + player.lastResponse
+        });
+        updatedStories.push(updatedStory)
+        await sendSMS(player.lastResponse, nextPlayer.number);
     })
     // sendSNS that round is over.
     return sendSNS(roomCode, updatedStories);
@@ -125,16 +148,18 @@ async function sendSNS(roomCode, updatedStories) {
     var publishTextPromise = new AWS.SNS({ apiVersion: '2010-03-31' }).publish(params).promise();
 
     // Handle promise's fulfilled/rejected states
-    return publishTextPromise.then(
-        function (data) {
-            console.log(`Message ${params.Message} send sent to the topic ${params.TopicArn}`);
-            console.log("MessageID is " + data.MessageId);
-            return Promise.resolve()
-        }).catch(
-            function (err) {
-                console.error(err, err.stack);
-                return Promise.reject()
-            });
+    return new Promise((res, rej) => {
+        return publishTextPromise.then(
+            function (data) {
+                console.log(`Message ${params.Message} send sent to the topic ${params.TopicArn}`);
+                console.log("MessageID is " + data.MessageId);
+                return res(data)
+            }).catch(
+                function (err) {
+                    console.error(err, err.stack);
+                    return rej(err)
+                });
+    })
 }
 
 module.exports = {

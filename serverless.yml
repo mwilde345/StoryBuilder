@@ -15,6 +15,11 @@
 service: story-builder
 plugins:
   - serverless-dotenv-plugin
+  - serverless-webpack
+  - serverless-offline
+
+custom:
+  webpackIncludeModules: true
 # app and org for use with dashboard.serverless.com
 #app: your-app-name
 #org: your-org-name
@@ -30,6 +35,7 @@ provider:
     restApi: true
   apiGateway:
     logs: true
+  timeout: 10
 
 # you can overwrite defaults here
   stage: dev
@@ -80,6 +86,10 @@ functions:
       # TWILIO_ACCOUNT_SID: ${env:TWILIO_ACCOUNT_SID}
       # TWILIO_AUTH_TOKEN: ${env:TWILIO_AUTH_TOKEN}
       MESSAGES_LAMBDA: "${self:service}-${self:provider.stage}-message"
+    events:
+      - sqs: 
+          arn: arn:aws:sqs:us-east-1:574024764028:story-builder-messages-queue.fifo	
+          batchSize: 10
   message:
     handler: messages.main
     #    Define function environment variables here
@@ -97,11 +107,15 @@ functions:
           integration: lambda
           # request:
           #   passThrough: WHEN_NO_TEMPLATES
-            # template:
-            #   application/x-www-form-urlencoded: '#set($httpPost = $input.path('$').split(""&"")){#foreach( $kvPair in $httpPost ) #set($kvTokenised = $kvPair.split(""="")) #if( $kvTokenised.size() > 1 )   ""$kvTokenised[0]"" : ""$kvTokenised[1]""#if( $foreach.hasNext ),#end #else   ""$kvTokenised[0]"" : """"#if( $foreach.hasNext ),#end #end#end}"
+          #   template:
+          #     'application/x-www-form-urlencoded': "${file(./integration-request-template.vtl)}"
           # response:
-            # template:
-            #     application/xml: '#set($inputRoot = $input.path('$')) \n $inputRoot'
+          #   template:
+          #     'application/xml': "${file(./integration-response-template.vtl)}"
+          # methodResponses:
+          #   responseModels:
+          #     'application/xml': Empty
+          #     statusCode: 200
 #      - websocket: $connect
 #      - s3: ${env:BUCKET}
 #      - schedule: rate(10 minutes)
