@@ -7,10 +7,10 @@ export async function getPlayer(params) {
     return new Promise((res, rej) => {
         return Player.get(params.number, {ConsistentRead: true}, (err, player) => {
             if (err) {
-                console.log('Error putting player ' + params.number);
+                console.log('Error getting player ' + params.number);
                 return rej(err)
             } else {
-                console.log('Put player ' + params.number);
+                console.log('got player ' + params.number);
                 return res(player);
             }
         })
@@ -35,10 +35,10 @@ export async function updatePlayer(params) {
     return new Promise((res, rej) => {
         Player.update(params, (err, player) => {
             if (err) {
-                console.log('Error putting player ' + params.number);
+                console.log('Error updating player ' + params.number);
                 return rej(err)
             } else {
-                console.log('Put player ' + params.number);
+                console.log('update player ' + params.number);
                 return res(player);
             }
         })
@@ -122,17 +122,6 @@ export async function updateRoom(params) {
             return res(room);
         })
     })
-    // Account.update({ email: 'foo@example.com', age: { $add: 1 } }, function (err, acc) {
-    //     console.log('incremented age by 1', acc.get('age'));
-    // });
-
-    // BlogPost.update({
-    //     email: 'werner@example.com',
-    //     title: 'Expanding the Cloud',
-    //     tags: { $add: 'cloud' }
-    // }, function (err, post) {
-    //     console.log('added single tag to blog post', post.get('tags'));
-    // });
 }
 
 export const Player = dynamo.define('Player', {

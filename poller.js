@@ -9,88 +9,98 @@ const randomWords = require('random-words');
 
 async function main(event, context) {
     console.log('in poller', event);
-
-    return new Promise((res, rej) => {
-        console.log('in promise')
-        if ("Records" in event) {
-            let messages = event.Records;
-            messages.forEach(async record => {
-                console.log('doing record ', record)
-                let receiptHandle = record.receiptHandle;
-                console.log('body here ', record.body);
-                let body = JSON.parse(record.body);
-                console.log('parsed ', body);
-                let { roomCode, From, type } = body;
-                let room = await dynamoClient.getRoom(roomCode);
-                console.log('room', room)
-                let randomName = randomWords(1)[0];
-                if (type === 'response') {
-                    let updatedRoom = await handleResponse(room, From, body.Body);
-                    let playersRemaining = updatedRoom.get('players').filter(player => {
-                        return player.lastResponseRound < room.get('currentRound')
-                    })
-                    if (!playersRemaining.length) {
-                        await handleEndOfRound(room);
-                    }
-                    res(deleteMessage(receiptHandle));
-                } else if (type === 'join') {
-                    console.log('in join')
-                    const vip = room.get('vip');
-                    if (From === vip) {
-                        console.log('it from vip')
-                        let snsResult = await sendSNS(roomCode, []);
-                        console.log('sns res ', snsResult);
-                        return res(deleteMessage(receiptHandle));
-                    } else {
-                        console.log('updating room')
-                        let updatedPlayers = room.get('players');
-                        updatedPlayers.push({
-                            number: From,
-                            name: randomName,
-                            order: room.get('players').length + 1,
-                            lastResponseRound: room.get('currentRound')
-                        })
-                        let updatedRoom = await dynamoClient.updateRoom({
-                            roomCode,
-                            startTime: room.get('startTime'),
-                            players: updatedPlayers
-                        })
-                        console.log('updated room ', updatedRoom)
-                        await sendSMS(`${From} has joined as ${randomName}!`, vip);
-                        console.log('sent sms')
-                    }
-                    console.log('deleting message');
-                    return res(deleteMessage(receiptHandle));
-                } else {
-                    return rej('Bad message type');
+    if ("Records" in event) {
+        let messages = event.Records;
+        await asyncForEach(messages, async record => {
+            console.log('doing record ', record)
+            let receiptHandle = record.receiptHandle;
+            console.log('body here ', record.body);
+            let body = JSON.parse(record.body);
+            console.log('parsed ', body);
+            let { roomCode, From, type } = body;
+            let room = await dynamoClient.getRoom(roomCode);
+            if (!room) {
+                return Promise.resolve(deleteMessage(receiptHandle));
+            }
+            console.log('room', room)
+            let randomName = randomWords(1)[0];
+            if (type === 'response') {
+                console.log('its a response')
+                let updatedRoom = await handleResponse(room, From, body.Body.replace(/\+/gi, ' '));
+                console.log('players ', updatedRoom.get('players'));
+                let playersRemaining = updatedRoom.get('players').filter(player => {
+                    return (player.lastResponseRound < room.get('currentRound'));
+                })
+                console.log('filtered ', playersRemaining);
+                console.log('length: ', playersRemaining.length)
+                if (!playersRemaining || playersRemaining.length === 0) {
+                    await handleEndOfRound(updatedRoom);
                 }
-            })
+                return Promise.resolve(deleteMessage(receiptHandle));
+            } else if (type === 'join') {
+                console.log('in join')
+                const vip = room.get('vip');
+                if (From === vip) {
+                    console.log('it from vip')
+                    let snsResult = await sendSNS(roomCode, []);
+                    console.log('sns res ', snsResult);
+                    return Promise.resolve(deleteMessage(receiptHandle));
+                } else {
+                    console.log('updating room')
+                    let updatedPlayers = room.get('players');
+                    let newPlayer = {
+                        number: From,
+                        name: randomName,
+                        order: room.get('players').length + 1,
+                        lastResponseRound: room.get('currentRound')
+                    }
+                    updatedPlayers.push(newPlayer)
+                    await sendSMS(`You joined the game! Your name is ${randomName}. Change your name ` +
+                        `by responding with Name, my cool name.\n\n Number of current players: ${updatedPlayers.length}.\n\n` +
+                        `Waiting on ${vip} to get started.`, From)
+                    let updatedRoom = await dynamoClient.updateRoom({
+                        roomCode,
+                        startTime: room.get('startTime'),
+                        players: updatedPlayers
+                    })
+                    console.log('updated room ', updatedRoom)
+                    await sendSMS(`${From} has joined as ${randomName}!`, vip);
+                    console.log('sent sms')
+                }
+                console.log('deleting message');
+                return Promise.resolve(deleteMessage(receiptHandle));
+            } else {
+                return Promise.reject('Bad message type');
+            }
+        })
 
-        } else {
-            return rej('invalid message ', event);
-        }
-    })
+    } else {
+        return Promise.reject('invalid message ', event);
+    }
 }
 
 async function deleteMessage(id) {
+    console.log('deleting sqs message ', id)
     var params = {
         QueueUrl: process.env.MESSAGES_QUEUE_URL,
         ReceiptHandle: id
     };
     return new Promise((res, rej) => {
         sqs.deleteMessage(params, function (err, data) {
-            if (err) rej(err, err.stack); // an error occurred
-            else res(data)         // successful response
+            if (err) return rej(err, err.stack); // an error occurred
+            else {
+                console.log('deleted sqs message');
+                return res(data)
+            }
         });
     })
 }
 
 async function handleResponse(room, From, Body) {
+    console.log('in handleResponse')
     let roomCode = room.get('roomCode');
     let players = room.get('players');
-    let currentStory = await dynamoClient.getStory({
-        roomCode,
-    })
+    console.log('roomCode and players', roomCode, players)
     let updatedPlayers = players.map(player => {
         if (player.number === From) {
             return {
@@ -100,33 +110,52 @@ async function handleResponse(room, From, Body) {
             }
         } else return player
     })
-    return dynamoClient.updateRoom({ roomCode, players: updatedPlayers, startTime: room.get('startTime') });
+    console.log('updating room')
+    let updatedRoom = await dynamoClient.updateRoom({ roomCode, players: updatedPlayers, startTime: room.get('startTime') });
+    console.log('updated room ', updatedRoom);
+    return updatedRoom;
 }
 
 async function handleEndOfRound(room) {
+    console.log('in handle end of round')
     let roomCode = room.get('roomCode');
     let stories = await dynamoClient.getStoriesForRoom({ roomCode: roomCode.toUpperCase() });
+    console.log('stories ', stories)
     let updatedStories = [];
-    let playerCount = players.length;
     let players = room.get('players');
+    let playerCount = players.length;
     //  TODO: auto-generate responses for left out players
-    players.forEach(async player => {
+    console.log('about to loop players')
+    await asyncForEach(players, async player => {
+        console.log('looping players', player)
         let nextPlayer = players.find(nestedPlayer => nestedPlayer.order
             === (player.order + 1));
         let currentStoryOwner = players.find(nestedPlayer => nestedPlayer.order
             === (playerCount - Math.abs(player.order - room.get('currentRound'))))
         // todo: wrong
         let currentStory = stories.find(story => story.get('starter') === currentStoryOwner.number);
+        console.log('current story', currentStory)
         let updatedStory = await dynamoClient.updateStory({
             roomCode: currentStory.get('roomCode'),
             starter: currentStory.get('starter'),
-            text: currentStory.get('text') + '\n' + player.lastResponse
+            text: unescape(currentStory.get('text') ? currentStory.get('text') + '\n' + player.lastResponse : player.lastResponse)
+                .replace(/\+/gi,' ')
         });
+        console.log('updated story', updatedStory)
         updatedStories.push(updatedStory)
-        await sendSMS(player.lastResponse, nextPlayer.number);
+        if (nextPlayer && nextPlayer.number) {
+            await sendSMS(player.lastResponse, nextPlayer.number);
+        }
     })
+    console.log('done looping players');
     // sendSNS that round is over.
     return sendSNS(roomCode, updatedStories);
+}
+
+async function asyncForEach(array, callback) {
+    for (let index = 0; index < array.length; index++) {
+        await callback(array[index], index, array);
+    }
 }
 
 async function sendSMS(body, to) {
@@ -145,11 +174,9 @@ async function sendSNS(roomCode, updatedStories) {
         }),
         TopicArn: process.env.SNS_TOPIC_ARN
     }
-    var publishTextPromise = new AWS.SNS({ apiVersion: '2010-03-31' }).publish(params).promise();
-
-    // Handle promise's fulfilled/rejected states
     return new Promise((res, rej) => {
-        return publishTextPromise.then(
+        return new AWS.SNS({ apiVersion: '2010-03-31' }).publish(params).promise()
+        .then(
             function (data) {
                 console.log(`Message ${params.Message} send sent to the topic ${params.TopicArn}`);
                 console.log("MessageID is " + data.MessageId);
@@ -159,6 +186,7 @@ async function sendSNS(roomCode, updatedStories) {
                     console.error(err, err.stack);
                     return rej(err)
                 });
+
     })
 }
 
