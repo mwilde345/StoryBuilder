@@ -15,6 +15,10 @@ const lambda = new AWS.Lambda();
 const s3 = new AWS.S3();
 const POLLER_LAMBDA = process.env.POLLER_LAMBDA
 const sqs = new AWS.SQS({ apiVersion: '2012-11-05' })
+const DEFAULT_ROUND_LIMIT = 1;
+const DEFAULT_CHAR_LIMIT = 70;
+const MAX_CHAR_LIMIT = 200;
+const MAX_ROUNDS = 10;
 
 function IsJsonString(str) {
     try {
@@ -53,14 +57,16 @@ async function main(event) {
     } else if ("SmsMessageSid" in event) {
         // TODO: if they are not in Players DB and it doesn't have Join, do nothing, or say 
         //  'Welcome, text New Game'
-
+        // TODO: handle texts between end of round and delivering audio and text. 
         // it's from twilio
         let message = event.Body;
         event.From = unescape(event.From);
         message = message.replace(/\+/gi, ' ');
         console.log('received twilio message ', message);
         let player = await dynamoClient.getPlayer({ number: event.From });
-        if (message.toLowerCase().replace(/ /gi, '').trim().startsWith('newgame')) {
+        let trimmedMessage = message.toLowerCase().replace(/ /gi, '').trim();
+        if (trimmedMessage.startsWith('newgame')) {
+            let roundLimit = parseInt(trimmedMessage.match(/^(.*)([0-9]+)$/)[2]) || DEFAULT_ROUND_LIMIT;
             console.log('they said new  game')
             //TODO: if in game, use as response
             let roomCode = makeid(4).toUpperCase();
@@ -71,12 +77,23 @@ async function main(event) {
                     roomHistory: [roomCode]
                 })
             }
-            return newGame(event.From, roomCode, player);
+            return newGame(event.From, roomCode, player, roundLimit);
         }
-        else if (message.toLowerCase().replace(/ /gi, '').trim().startsWith('ready')) {
+        else if (!player || !(player.get('currentRoom'))) {
+            // first-timers or need a new game
+            return welcome(event.From)
+        }
+        else if (trimmedMessage.endsWith('rounds')) {
+            let roundLimit = parseInt(trimmedMessage.match(/^([0-9]+)(.*)$/)[1]);
+            return handleRoundLimit(event, player, roundLimit);
+        } else if (trimmedMessage.endsWith('limit')) {
+            let charLimit = parseInt(trimmedMessage.match(/^([0-9]+)(.*)$/)[1]);
+            return handleCharLimit(event, player, charLimit);
+        }
+        else if (trimmedMessage.startsWith('ready')) {
             return ready(event);
         }
-        else if (message.toLowerCase().replace(/ /gi, '').trim().startsWith('join')) {
+        else if (trimmedMessage.startsWith('join')) {
             let roomCode = message.match(/(Join)([,]?)(.*)/i)[3].trim().toUpperCase();
             if (!player) {
                 await dynamoClient.putPlayer({
@@ -86,19 +103,71 @@ async function main(event) {
             }
             return join(roomCode, event.From);
         }
-        else if (message.toLowerCase().replace(/ /gi, '').trim().startsWith('name')) {
+        else if (trimmedMessage.startsWith('name')) {
             let name = message.match(/(Name)([,]?)(.*)/i)[3].trim();
             if (!name || !name.length || name.replace(/ /gi, '').length == 0) {
                 name = randomWords(1)[0];
             }
             return setName(name, event.From);
-        }
-        else if (!player || !(player.get('currentRoom'))) {
-            // first-timers or need a new game
-            return welcome(event.From)
         } else {
             return response(event);
         }
+    }
+}
+
+async function handleRoundLimit(event, player, roundLimit) {
+    let roomCode = player.get('currentRoom');
+    let room = await dynamoClient.getRoom(roomCode);
+    let vip = room.get('vip');
+    if (!(room.get('isReady'))) {
+        if (vip !== player.get('number')) {
+            return sendSMS(player.get('number'), `Only the game leader, ${vip}, can change the round limit.`)
+        }
+        let setRoundLimit = roundLimit;
+        if (isNaN(roundLimit) || roundLimit < 1 || roundLimit > MAX_ROUNDS) {
+            setRoundLimit = DEFAULT_ROUND_LIMIT;
+            await sendSMS(vip, `Oops! You must specify a round limit between 1 and ${MAX_ROUNDS}.\n` +
+                `I'll set it to ${DEFAULT_ROUND_LIMIT} for now.`)
+        } else {
+            await dynamoClient.updateRoom({
+                roomCode, startTime: room.get('startTime'), roundLimit: setRoundLimit
+            });
+            return sendSMS(vip, `Successfully updated round limit to ${setRoundLimit}`);
+        }
+    }
+    // else if (vip === player.get('number')) {
+    //     return sendSMS('The game has already started, you cannot change the round limit.')
+    // } 
+    else {
+        return response(event);
+    }
+}
+
+async function handleCharLimit(event, player, charLimit) {
+    let roomCode = player.get('currentRoom');
+    let room = await dynamoClient.getRoom(roomCode);
+    let vip = room.get('vip');
+    if (!(room.get('isReady'))) {
+        if (vip !== player.get('number')) {
+            return sendSMS(player.get('number'), `Only the game leader, ${vip}, can change the response character limit.`)
+        }
+        let setCharLimit = charLimit;
+        if (isNaN(charLimit) || charLimit < 1 || charLimit > MAX_CHAR_LIMIT) {
+            setCharLimit = DEFAULT_ROUND_LIMIT;
+            await sendSMS(vip, `Oops! You must specify a character limit between 1 and ${MAX_CHAR_LIMIT}.\n` +
+                `I'll set it to ${DEFAULT_CHAR_LIMIT} for now.`)
+        } else {
+            await dynamoClient.updateRoom({
+                roomCode, startTime: room.get('startTime'), charLimit: setCharLimit
+            });
+            return sendSMS(vip, `Successfully updated response character limit to ${setCharLimit}`);
+        }
+    }
+    // else if (vip === player.get('number')) {
+    //     return sendSMS('The game has already started, you cannot change the round limit.')
+    // } 
+    else {
+        return response(event);
     }
 }
 
@@ -164,7 +233,7 @@ async function renameS3(oldKey, newKey) {
                         console.log('done deleting old s3 obj');
                         return res(result);
                     })
-                })
+            })
             // Error handling is left up to reader
             .catch((e) => {
                 console.error(e)
@@ -184,12 +253,14 @@ async function endRound(record) {
     const room = await dynamoClient.getRoom(roomCode);
     console.log('got room ', room)
     const players = room.get('players');
+    const roundLimit = room.get('roundLimit');
+    const charLimit = room.get('charLimit');
     const currentRound = room.get('currentRound');
     console.log('players and round', players, currentRound)
     // const stories = await dynamoClient.getStoriesForRoom().filter(story => {
     //     players.map(player => player.number).includes(story.starter);
     // })
-    if (currentRound === players.length) {
+    if (currentRound === players.length * roundLimit) {
         console.log('game over');
         // end the game
         // TODO: text all that game is over and audio is being generated
@@ -217,8 +288,9 @@ async function endRound(record) {
         if (currentRound === 0) {
             console.log('its the first round')
             await asyncForEach(players, async player => {
-                await sendSMS(player.number, `The game is starting! Start your story by responding to this message. ` +
-                    `Hurry, you have ${room.get('timeLimit')} seconds!`);
+                await sendSMS(player.number, `The game is starting!.\n` +
+                    `Rules: ${charLimit} character limit per response. ${roundLimit} rounds.\n` +
+                    `Start your story by responding to this message. Have fun!`);
             })
         }
         let updatedRoom = await dynamoClient.updateRoom({
@@ -258,12 +330,19 @@ async function textToS3(text, starter, roomCode) {
     })
 }
 
-async function newGame(vip, roomCode, player) {
+async function newGame(vip, roomCode, player, roundLimit) {
     console.log('in new game')
     let currentRoom = player.get('currentRoom')
     if (currentRoom && currentRoom != undefined && currentRoom.toUpperCase() !== roomCode.toUpperCase()) {
         return sendSMS(vip, `You are already in game: ${player.get('currentRoom')}. Finish that one before starting another!`);
     }
+    let setRoundLimit = roundLimit;
+    if (isNaN(roundLimit) || roundLimit < 1 || roundLimit > MAX_ROUNDS) {
+        setRoundLimit = DEFAULT_ROUND_LIMIT;
+        await sendSMS(vip, `Oops! You must specify a round limit between 1 and ${MAX_ROUNDS}.\n` +
+            `I'll set it to ${DEFAULT_ROUND_LIMIT} for now.`)
+    }
+    // There will be ${roundLimit} rounds of play, and a ${charLimit} character limit per resposne
     let randomName = randomWords(1)[0];
     let timeLimit = 30;
     let players = [{
@@ -273,7 +352,8 @@ async function newGame(vip, roomCode, player) {
         lastResponseRound: 0
     }]
     await dynamoClient.putRoom({
-        roomCode: roomCode.toUpperCase(), vip, startTime: new Date(), timeLimit, currentRound: 0, players
+        roomCode: roomCode.toUpperCase(), vip, startTime: new Date(), timeLimit, currentRound: 0, players,
+        charLimit: DEFAULT_CHAR_LIMIT, roundLimit: setRoundLimit
     })
     await dynamoClient.updatePlayer({
         number: vip,
@@ -284,10 +364,15 @@ async function newGame(vip, roomCode, player) {
         roomCode: roomCode.toUpperCase(),
         starter: vip
     })
-    return sendSMS(vip, `Welcome! Invite friends:\n\nJoin my Story Buider game! Text 'Join, ${roomCode.toUpperCase()}' ` +
-        `to ${process.env.TWILIO_NUMBER}\n\n` +
-        `Your name is ${randomName}. Change your name by responding with: 'Name, my cool name'.\n\n` +
-        `When all players have joined, respond 'Ready'.`);
+    await sendSMS(vip, `Welcome to a new game of Story Builder!\n` +
+        `Your name is ${randomName}. Change your name anytime by responding with: 'Name, my cool name'.\n\n` +
+        `This game will have ${roundLimit} rounds. Change it to 3 (or any number) by responding: '3 rounds'.\n` +
+        `There is a ${DEFAULT_CHAR_LIMIT} character limit per response. Change it to a number between 1 and ${MAX_CHAR_LIMIT} ` +
+        `by responding: '${MAX_CHAR_LIMIT} limit'.\n` +
+        `Invite friends: `);
+    await sendSMS(vip, `Join my Story Buider game! Text 'Join, ${roomCode.toLowerCase()}' ` +
+        `to ${process.env.TWILIO_NUMBER}`);
+    return sendSMS(vip, `When all players have joined, respond 'Ready'. This will start the game and lock in the rules.`);
     // start listening for join sqs events
     // return invokeLambda(roomCode.toUpperCase(), players, 0)
 }
@@ -335,17 +420,21 @@ async function response(event) {
     // TODO: visibility on queue affects when messages come in. in FIFO, all other messages blocked....
     //  so, it says game has begun. I text response. Hit's messages. 5 minutes later hit's poller. That's with 5 min
     //  visibility timeout and 1 minute lambda timeout.
-    // TODO: disable multiple responses before end of round.
     // TODO: do something with a response between NEW GAME and READY
     console.log('in response')
     // TODO: restrict response character length in case of copy-paste abuse and polly costs
     let { Body, From } = event;
     const player = await dynamoClient.getPlayer({ number: From });
     let roomCode = player.get('currentRoom').toUpperCase();
-    console.log('got room code', roomCode)
-    return sendSQS({
+    let room = await dynamoClient.getRoom(roomCode);
+    let charLimit = room.get('charLimit');
+    if (Body.length > charLimit) {
+        return sendSMS(player.get('number'), `Oops! Your response was longer than the rules specified. You have ${Body.length} ` +
+        `characters. The limit for this game is ${charLimit}. Please re-submit a shorter message.`)
+    } else return sendSQS({
         Body, From, roomCode, type: 'response', text: Body
     }, false)
+
 }
 
 async function setName(name, From) {
@@ -413,7 +502,7 @@ async function join(roomCode, From) {
 async function sendSMS(to, body) {
     console.log('in sms sending')
     return client.messages
-        .create({ body, from: process.env.TWILIO_NUMBER, to })
+        .create({ body: unescape(body), from: process.env.TWILIO_NUMBER, to })
         .then(message => {
             console.log('sent success ', message)
             return Promise.resolve(message)
@@ -423,16 +512,6 @@ async function sendSMS(to, body) {
             return Promise.reject(err)
         })
 }
-
-// this isn't used, because texts are sent from the poller.
-// async function sendSMSResponse(recipient, message) {
-//     // https://www.twilio.com/docs/sms/send-messages
-//     const response = new MessagingResponse();
-//     return response.message({
-//         to: recipient,
-//         from: process.env.TWILIO_NUMBER
-//     }, message).toString();
-// }
 // after receiving message and updating non-shared DB, send SQS messages
 async function sendSQS(data, isJoin) {
     console.log('sending sqs. data and isJoin', data, isJoin);
@@ -445,7 +524,7 @@ async function sendSQS(data, isJoin) {
             // huge issue from this: https://stackoverflow.com/questions/49647566/amazon-aws-sqs-fifo-queue-sendmessage-issue
             // if content based dedup isn't on the queue, this is required. one of them is required.
             MessageDeduplicationId: `m-${data.roomCode}-${data.From}-${data.text}`,
-            MessageGroupId: `${data.roomCode}${isJoin ? '' : `-${data.From}`}`,
+            MessageGroupId: `${data.roomCode}`,//`${data.roomCode}${isJoin ? '' : `-${data.From}`}`,
             QueueUrl: process.env.MESSAGES_QUEUE_URL
         }).promise()
             .then(result => {

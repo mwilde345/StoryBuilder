@@ -146,6 +146,8 @@ export const Room = dynamo.define('Room', {
         vip: Joi.string(),
         timeLimit: Joi.number(),
         currentRound: Joi.number(),
+        roundLimit: Joi.number(),
+        charLimit: Joi.number(),
         players: Joi.array().items(
             Joi.object({
                 number: Joi.string(),

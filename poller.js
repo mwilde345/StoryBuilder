@@ -26,15 +26,22 @@ async function main(event, context) {
             let randomName = randomWords(1)[0];
             if (type === 'response') {
                 console.log('its a response')
-                let updatedRoom = await handleResponse(room, From, body.Body.replace(/\+/gi, ' '));
-                console.log('players ', updatedRoom.get('players'));
-                let playersRemaining = updatedRoom.get('players').filter(player => {
-                    return (player.lastResponseRound < room.get('currentRound'));
-                })
-                console.log('filtered ', playersRemaining);
-                console.log('length: ', playersRemaining.length)
-                if (!playersRemaining || playersRemaining.length === 0) {
-                    await handleEndOfRound(updatedRoom);
+                let players = room.get('players');
+                let currentPlayer = players.find(player => player.number === From);
+                if (currentPlayer.lastResponseRound === room.get('currentRound')) {
+                    sendSMS(`You've already responded for this round.\nPlease wait for everyone to finish their response.`,
+                        From);
+                } else {
+                    let updatedRoom = await handleResponse(room, From, body.Body.replace(/\+/gi, ' '));
+                    console.log('players ', updatedRoom.get('players'));
+                    let playersRemaining = updatedRoom.get('players').filter(player => {
+                        return (player.lastResponseRound < room.get('currentRound'));
+                    })
+                    console.log('filtered ', playersRemaining);
+                    console.log('length: ', playersRemaining.length)
+                    if (!playersRemaining || playersRemaining.length === 0) {
+                        await handleEndOfRound(updatedRoom);
+                    }
                 }
                 return Promise.resolve(deleteMessage(receiptHandle));
             } else if (type === 'join') {
@@ -129,10 +136,19 @@ async function handleEndOfRound(room) {
     await asyncForEach(players, async player => {
         console.log('looping players', player)
         let nextPlayer = players.find(nestedPlayer => nestedPlayer.order
-            === (player.order + 1));
+            === (1 + (player.order % playerCount)));
+        console.log('next player ', nextPlayer);
+        let orderNum1 = player.order - (player.lastResponseRound - 1);
+        let orderNum2 = player.order;
+        if (orderNum1 > 0) {
+            orderNum2 = orderNum1;
+        } else if (orderNum1 === 0) {
+            orderNum2 = playerCount;
+        } else if (orderNum1 < 0) {
+            orderNum2 = playerCount + orderNum1
+        }
         let currentStoryOwner = players.find(nestedPlayer => nestedPlayer.order
-            === (playerCount - Math.abs(player.order - room.get('currentRound'))))
-        // todo: wrong
+            === orderNum2)
         let currentStory = stories.find(story => story.get('starter') === currentStoryOwner.number);
         console.log('current story', currentStory)
         let updatedStory = await dynamoClient.updateStory({
@@ -144,7 +160,7 @@ async function handleEndOfRound(room) {
         console.log('updated story', updatedStory)
         updatedStories.push(updatedStory)
         if (nextPlayer && nextPlayer.number) {
-            await sendSMS(player.lastResponse, nextPlayer.number);
+            await sendSMS(`${player.name} said:\n"${player.lastResponse}"`, nextPlayer.number);
         }
     })
     console.log('done looping players');
@@ -159,11 +175,17 @@ async function asyncForEach(array, callback) {
 }
 
 async function sendSMS(body, to) {
+    console.log('in sms sending poller', body, to)
     return client.messages
-        .create({ body, from: process.env.TWILIO_NUMBER, to })
+        .create({ body: unescape(body), from: process.env.TWILIO_NUMBER, to })
         .then(message => {
+            console.log('sent success ', message)
             return Promise.resolve(message)
-        });
+        })
+        .catch(err => {
+            console.log(err);
+            return Promise.reject(err)
+        })
 }
 
 async function sendSNS(roomCode, updatedStories) {
