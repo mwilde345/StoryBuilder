@@ -1,0 +1,20 @@
+Dynamo error (getRoom and others, retry/backoff)
+
+{ Error: ESOCKETTIMEDOUT
+    at ClientRequest.<anonymous> (/var/task/node_modules/request/request.js:816:19)
+    at Object.onceWrapper (events.js:286:20)
+    at ClientRequest.emit (events.js:198:13)
+    at ClientRequest.EventEmitter.emit (domain.js:448:20)
+    at TLSSocket.emitRequestTimeout (_http_client.js:662:40)
+    at Object.onceWrapper (events.js:286:20)
+    at TLSSocket.emit (events.js:198:13)
+    at TLSSocket.EventEmitter.emit (domain.js:448:20)
+    at TLSSocket.Socket._onTimeout (net.js:443:8)
+    at ontimeout (timers.js:436:11) code: 'ESOCKETTIMEDOUT', connect: false }
+
+Spanish characters in name,
+
+sending pic breaks in poller at handle response loop saYS body is empty and players arr left empty?
+
+socket timeout in poller aftyer parsed
+

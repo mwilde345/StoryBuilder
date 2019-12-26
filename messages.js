@@ -8,6 +8,7 @@ const s3urls = require('@mapbox/s3urls');
 const randomWords = require('random-words');
 const shorturl = require('shorturl');
 const shorturl2 = require('node-url-shortener');
+const emoji = require('node-emoji')
 
 const MessagingResponse = require('twilio').twiml.MessagingResponse;
 const AWS = require('aws-sdk');
@@ -41,6 +42,22 @@ async function main(event) {
      * * Name <Name>
      * * Ready
      */
+
+     // TODO: enable the vip to send a broadcast message to everyone.
+     // TODO: time limit and auto generate
+     //     * if joining a game that is already started, tell them that
+     //     * time limit to join and change your name
+     //     * TODO: while waiting for responses, players can see who they are waiting on.
+     //     * use cloudwatch events for time limit.
+     //     * text players notifications on time left.
+     //     * when the round is over, add the round number before the text message.
+     //     * TODO: emojies. with voice?
+    //      * * %F0%9F%98%82 is emoji from twilio
+     //     * TODO: handle sending images
+     //     * TODO: force at least 1 character for response
+     //     * spanish characters in name
+     //     * dynamo esockettimeout retries
+     //     * end game, clear everyone's currentRoom
     if ("Records" in event) {
         // it's from sns
         let record = event.Records[0].Sns.Message//JSON.parse(event.Records[0].Sns.Message);
@@ -61,12 +78,13 @@ async function main(event) {
         // it's from twilio
         let message = event.Body;
         event.From = unescape(event.From);
-        message = message.replace(/\+/gi, ' ');
         console.log('received twilio message ', message);
+        message = unescape(decodeURI(message.replace(/\+/gi, ' ')).trim());
+        console.log('after parsing ', message);
         let player = await dynamoClient.getPlayer({ number: event.From });
-        let trimmedMessage = message.toLowerCase().replace(/ /gi, '').trim();
+        let trimmedMessage = message.toLowerCase().replace(/ /gi, '');
         if (trimmedMessage.startsWith('newgame')) {
-            let roundLimit = parseInt(trimmedMessage.match(/^(.*)([0-9]+)$/)[2]) || DEFAULT_ROUND_LIMIT;
+            let roundLimit = parseInt(trimmedMessage.match(/^(.*?)([0-9]+)?$/)[2]) || DEFAULT_ROUND_LIMIT;
             console.log('they said new  game')
             //TODO: if in game, use as response
             let roomCode = makeid(4).toUpperCase();
@@ -79,20 +97,6 @@ async function main(event) {
             }
             return newGame(event.From, roomCode, player, roundLimit);
         }
-        else if (!player || !(player.get('currentRoom'))) {
-            // first-timers or need a new game
-            return welcome(event.From)
-        }
-        else if (trimmedMessage.endsWith('rounds')) {
-            let roundLimit = parseInt(trimmedMessage.match(/^([0-9]+)(.*)$/)[1]);
-            return handleRoundLimit(event, player, roundLimit);
-        } else if (trimmedMessage.endsWith('limit')) {
-            let charLimit = parseInt(trimmedMessage.match(/^([0-9]+)(.*)$/)[1]);
-            return handleCharLimit(event, player, charLimit);
-        }
-        else if (trimmedMessage.startsWith('ready')) {
-            return ready(event);
-        }
         else if (trimmedMessage.startsWith('join')) {
             let roomCode = message.match(/(Join)([,]?)(.*)/i)[3].trim().toUpperCase();
             if (!player) {
@@ -103,8 +107,23 @@ async function main(event) {
             }
             return join(roomCode, event.From);
         }
+        else if (!player || !(player.get('currentRoom'))) {
+            // first-timers or need a new game
+            return welcome(event.From)
+        }
+        else if (trimmedMessage.endsWith('rounds')) {
+            let roundLimit = parseInt(trimmedMessage.match(/^([0-9]+)?(.*)$/)[1]);
+            return handleRoundLimit(event, player, roundLimit);
+        } else if (trimmedMessage.endsWith('limit')) {
+            let charLimit = parseInt(trimmedMessage.match(/^([0-9]+)?(.*)$/)[1]);
+            return handleCharLimit(event, player, charLimit);
+        }
+        else if (trimmedMessage.startsWith('ready')) {
+            return ready(event);
+        }
         else if (trimmedMessage.startsWith('name')) {
-            let name = message.match(/(Name)([,]?)(.*)/i)[3].trim();
+            let name = message.match(/(Name)([,]?)(.*)/i)[3];
+            console.log('parsed name ', name)
             if (!name || !name.length || name.replace(/ /gi, '').length == 0) {
                 name = randomWords(1)[0];
             }
@@ -192,14 +211,21 @@ async function voice(record) {
     // TODO: iphone won't receive the shortened url. not verified??
     // let url = await shortenUrl(s3urls.toUrl(bucket, newKey)["bucket-in-host"]);
     // let url = await shortenUrl(s3urls.toUrl(bucket, key)["bucket-in-host"]);
-    // await renameS3(key, newKey)
+    // await renameS3(key, newKey)'
+    // await asyncForEach(players, async player => {
+    //     let { number } = player;
+    //     console.log(' here is a number ', number)
+    //     // let playerObj = await dynamoClient.getPlayer({ number });
+    //     await dynamoClient.updatePlayer({ number, currentRoom: null });
+    // })
     console.log('s3 url', url)
     const story = await dynamoClient.getStory({ roomCode, starter: number });
     console.log('story ', story);
     const text = story.get('text');
     const message = `Your story turned out to be: ${text}. Here is the audio! ${url}`;
     console.log('sending final text to ', story.get('starter'));
-    return sendSMS(story.get('starter'), message);
+    await sendSMS(story.get('starter'), message);
+    return dynamoClient.updatePlayer({ number, currentRoom: null });
     // get the number and roomcode from the s3 object url
     // fetch their story and send it back to them in text, put it on s3,
     // and send a link to the voice in the text.
@@ -265,23 +291,19 @@ async function endRound(record) {
         // end the game
         // TODO: text all that game is over and audio is being generated
         // remove currentRoom from all the players
-        await asyncForEach(players, async player => {
-            let { number } = player;
-            console.log(' here is a number ', number)
-            // let playerObj = await dynamoClient.getPlayer({ number });
-            await dynamoClient.updatePlayer({ number, currentRoom: null });
-        })
         console.log('stories', stories);
         // generate voice. Upload it and text to s3. Send the links to each player
         await asyncForEach(stories, async story => {
             console.log('doing speech and text');
             // not a raw story object so no .get
             const text = story.text;
+            const speechText = emoji.replace(text, (emoji) => `${emoji.key}.`);
             const starter = story.starter
+            await sendSMS(starter, `The game is over! Please wait while I generate audio for your story.`);
             await textToS3(text, starter, roomCode.toUpperCase());
             console.log('going to do speech');
             console.log('tospeech function', toSpeech);
-            return toSpeech(text, starter, roomCode.toUpperCase());
+            return toSpeech(speechText, starter, roomCode.toUpperCase());
             // update s3Link in the 'voice' function
         })
     } else {
@@ -424,15 +446,19 @@ async function response(event) {
     console.log('in response')
     // TODO: restrict response character length in case of copy-paste abuse and polly costs
     let { Body, From } = event;
+    let message = unescape(decodeURI(Body)).trim();
     const player = await dynamoClient.getPlayer({ number: From });
     let roomCode = player.get('currentRoom').toUpperCase();
     let room = await dynamoClient.getRoom(roomCode);
     let charLimit = room.get('charLimit');
-    if (Body.length > charLimit) {
+    if (!message || !message.length) {
+        return sendSMS(player.get('number'), `There was nothing in that message, try again with some actual text.`);
+    }
+    if (message.length > charLimit) {
         return sendSMS(player.get('number'), `Oops! Your response was longer than the rules specified. You have ${Body.length} ` +
         `characters. The limit for this game is ${charLimit}. Please re-submit a shorter message.`)
     } else return sendSQS({
-        Body, From, roomCode, type: 'response', text: Body
+        Body: message, From, roomCode, type: 'response'
     }, false)
 
 }
@@ -446,6 +472,7 @@ async function setName(name, From) {
     const room = await dynamoClient.getRoom(player.get('currentRoom'));
     console.log('room ', room);
     let oldPlayers = room.get('players');
+    let oldPlayerName = oldPlayers.find(player => player.number === From).name;
     let updatedPlayers = oldPlayers.map(player => {
         if (player.number === From) {
             return {
@@ -458,6 +485,9 @@ async function setName(name, From) {
         roomCode: room.get('roomCode').toUpperCase(), startTime: room.get('startTime'),
         players: updatedPlayers
     })
+    if (From !== room.get('vip')) {
+        await sendSMS(room.get('vip'), `${From} changed their name from ${oldPlayerName} to ${name}.`)
+    }
     return sendSMS(From, `Hello ${name}.`);
 }
 

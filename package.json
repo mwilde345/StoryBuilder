@@ -13,6 +13,7 @@
     "debug": "^4.1.1",
     "dynamodb": "^1.2.1",
     "joi": "^14.3.1",
+    "node-emoji": "^1.10.0",
     "node-url-shortener": "^1.0.1",
     "random-words": "^1.1.0",
     "serverless": "^1.60.0",

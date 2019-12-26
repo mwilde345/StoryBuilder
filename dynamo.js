@@ -52,16 +52,6 @@ export async function getStory(params) {
             return res(story);
         });
     })
-    // Account.get('test@example.com', {ConsistentRead: true, AttributesToGet : ['name','age']}, function (err, acc) {
-    //     console.log('got account', acc.get('email'))
-    //     console.log(acc.get('name'));
-    //     console.log(acc.get('age'));
-    //     console.log(acc.get('email')); // prints null
-    //   });
-    // BlogPost
-    //   .query('werner@example.com')
-    //   .where('title').equals('Expanding')
-    //   .exec();
 }
 
 export async function getStoriesForRoom(params) {
@@ -100,6 +90,7 @@ export async function getRoom(roomCode) {
             .descending()
             .exec((err, rooms) => {
                 if (err) return rej(err)
+                console.log('got room in dynamo');
                 let sorted = rooms.Items.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
                 return res(sorted[0])
             })

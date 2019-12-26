@@ -35,7 +35,7 @@ provider:
     restApi: true
   apiGateway:
     logs: true
-  timeout: 20
+  timeout: 12
 
 # you can overwrite defaults here
   stage: dev

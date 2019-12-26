@@ -104,11 +104,13 @@ async function deleteMessage(id) {
 }
 
 async function handleResponse(room, From, Body) {
-    console.log('in handleResponse')
+    console.log('in handleResponse from', From)
     let roomCode = room.get('roomCode');
     let players = room.get('players');
     console.log('roomCode and players', roomCode, players)
+    // TODO: breaks if Body was a picture or blank?
     let updatedPlayers = players.map(player => {
+        console.log('looping player in handleResponse ', player)
         if (player.number === From) {
             return {
                 ...player,
@@ -117,7 +119,7 @@ async function handleResponse(room, From, Body) {
             }
         } else return player
     })
-    console.log('updating room')
+    console.log('updating room with ', updatedPlayers)
     let updatedRoom = await dynamoClient.updateRoom({ roomCode, players: updatedPlayers, startTime: room.get('startTime') });
     console.log('updated room ', updatedRoom);
     return updatedRoom;
@@ -131,6 +133,10 @@ async function handleEndOfRound(room) {
     let updatedStories = [];
     let players = room.get('players');
     let playerCount = players.length;
+    let orders = range(1, playerCount + 1, 1);
+    console.log('orders ', orders);
+    let rotated = rotateArray(orders, room.get('currentRound') - 1);
+    console.log('rotated ', rotated)
     //  TODO: auto-generate responses for left out players
     console.log('about to loop players')
     await asyncForEach(players, async player => {
@@ -138,17 +144,10 @@ async function handleEndOfRound(room) {
         let nextPlayer = players.find(nestedPlayer => nestedPlayer.order
             === (1 + (player.order % playerCount)));
         console.log('next player ', nextPlayer);
-        let orderNum1 = player.order - (player.lastResponseRound - 1);
-        let orderNum2 = player.order;
-        if (orderNum1 > 0) {
-            orderNum2 = orderNum1;
-        } else if (orderNum1 === 0) {
-            orderNum2 = playerCount;
-        } else if (orderNum1 < 0) {
-            orderNum2 = playerCount + orderNum1
-        }
+        let currStoryOwnerNumber = rotated[player.order - 1];
+        console.log('curr story owner should have order ', currStoryOwnerNumber)
         let currentStoryOwner = players.find(nestedPlayer => nestedPlayer.order
-            === orderNum2)
+            === currStoryOwnerNumber)
         let currentStory = stories.find(story => story.get('starter') === currentStoryOwner.number);
         console.log('current story', currentStory)
         let updatedStory = await dynamoClient.updateStory({
@@ -166,6 +165,37 @@ async function handleEndOfRound(room) {
     console.log('done looping players');
     // sendSNS that round is over.
     return sendSNS(roomCode, updatedStories);
+}
+
+function range(start, stop, step) {
+    if (typeof stop == 'undefined') {
+        // one param defined
+        stop = start;
+        start = 0;
+    }
+
+    if (typeof step == 'undefined') {
+        step = 1;
+    }
+
+    if ((step > 0 && start >= stop) || (step < 0 && start <= stop)) {
+        return [];
+    }
+
+    var result = [];
+    for (var i = start; step > 0 ? i < stop : i > stop; i += step) {
+        result.push(i);
+    }
+
+    return result;
+}
+
+function rotateArray(arr, n) {
+    let copy = [];
+    arr.forEach((x, i) => {
+        copy[(i+n) % arr.length] = arr[i];
+    })
+    return copy;
 }
 
 async function asyncForEach(array, callback) {
