@@ -67,6 +67,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "sls webpack",
+    "deploy": "npm run lint && sls deploy -v",
+    "message": "npm run lint && sls deploy -f message",
+    "poller": "npm run lint && sls deploy -f poller",
     "lint": "./node_modules/.bin/eslint *.js"
   },
   "author": "",

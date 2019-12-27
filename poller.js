@@ -6,6 +6,9 @@ const client = require('twilio')(accountSid, authToken);
 const dynamoClient = require('./dynamo');
 const sqs = new AWS.SQS({ apiVersion: '2012-11-05' })
 const randomWords = require('random-words');
+const toSpeech = require('./toSpeech').main;
+const emoji = require('node-emoji')
+const s3 = new AWS.S3();
 
 async function main(event, context) {
     console.log('in poller', event);
@@ -29,7 +32,7 @@ async function main(event, context) {
                 let players = room.get('players');
                 let currentPlayer = players.find(player => player.number === From);
                 if (currentPlayer.lastResponseRound === room.get('currentRound')) {
-                    sendSMS(`You've already responded for this round.\nPlease wait for everyone to finish their response.`,
+                    await sendSMS(`🧐You've already responded for this round.\nPlease wait for everyone to finish their response.`,
                         From);
                 } else {
                     let updatedRoom = await handleResponse(room, From, body.Body.replace(/\+/gi, ' '));
@@ -49,8 +52,9 @@ async function main(event, context) {
                 const vip = room.get('vip');
                 if (From === vip) {
                     console.log('it from vip')
-                    let snsResult = await sendSNS(roomCode, []);
-                    console.log('sns res ', snsResult);
+                    // let snsResult = await sendSNS(roomCode, []);
+                    // console.log('sns res ', snsResult);
+                    await handleEndOfRound(room);
                     return Promise.resolve(deleteMessage(receiptHandle));
                 } else {
                     console.log('updating room')
@@ -62,9 +66,9 @@ async function main(event, context) {
                         lastResponseRound: room.get('currentRound')
                     }
                     updatedPlayers.push(newPlayer)
-                    await sendSMS(`You joined the game! Your name is ${randomName}. Change your name ` +
+                    await sendSMS(`👏 You joined the game! Your name is ${randomName}. Change your name ` +
                         `by responding with Name, my cool name.\n\n Number of current players: ${updatedPlayers.length}.\n\n` +
-                        `Waiting on ${vip} to get started.`, From)
+                        `Waiting on ${vip} to get started. 🎊`, From)
                     let updatedRoom = await dynamoClient.updateRoom({
                         roomCode,
                         startTime: room.get('startTime'),
@@ -129,42 +133,61 @@ async function handleEndOfRound(room) {
     console.log('in handle end of round')
     let roomCode = room.get('roomCode');
     let stories = await dynamoClient.getStoriesForRoom({ roomCode: roomCode.toUpperCase() });
-    console.log('stories ', stories)
     let updatedStories = [];
     let players = room.get('players');
+    let currentRound = room.get('currentRound');
+    let roundLimit = room.get('roundLimit');
+    let charLimit = room.get('charLimit');
     let playerCount = players.length;
     let orders = range(1, playerCount + 1, 1);
-    console.log('orders ', orders);
-    let rotated = rotateArray(orders, room.get('currentRound') - 1);
-    console.log('rotated ', rotated)
+    // this handles currentRound = 0
+    let rotated = rotateArray(orders, (currentRound || 1) - 1);
     //  TODO: auto-generate responses for left out players
-    console.log('about to loop players')
     await asyncForEach(players, async player => {
-        console.log('looping players', player)
-        let nextPlayer = players.find(nestedPlayer => nestedPlayer.order
-            === (1 + (player.order % playerCount)));
-        console.log('next player ', nextPlayer);
-        let currStoryOwnerNumber = rotated[player.order - 1];
-        console.log('curr story owner should have order ', currStoryOwnerNumber)
-        let currentStoryOwner = players.find(nestedPlayer => nestedPlayer.order
-            === currStoryOwnerNumber)
-        let currentStory = stories.find(story => story.get('starter') === currentStoryOwner.number);
-        console.log('current story', currentStory)
-        let updatedStory = await dynamoClient.updateStory({
-            roomCode: currentStory.get('roomCode'),
-            starter: currentStory.get('starter'),
-            text: unescape(currentStory.get('text') ? currentStory.get('text') + '\n' + player.lastResponse : player.lastResponse)
-                .replace(/\+/gi,' ')
-        });
-        console.log('updated story', updatedStory)
-        updatedStories.push(updatedStory)
-        if (nextPlayer && nextPlayer.number) {
-            await sendSMS(`${player.name} said:\n"${player.lastResponse}"`, nextPlayer.number);
+        if (currentRound === 0) {
+            await sendSMS(`🤩The game is starting!.\n` +
+                    `🚨Rules: ${charLimit} character limit per response. ${roundLimit} rounds.\n` +
+                    `Start your story by responding to this message. ✍️Have fun! 🎉`, player.number);
+        } else {
+            let nextPlayer = players.find(nestedPlayer => nestedPlayer.order
+                === (1 + (player.order % playerCount)));
+            let currStoryOwnerNumber = rotated[player.order - 1];
+            let currentStoryOwner = players.find(nestedPlayer => nestedPlayer.order
+                === currStoryOwnerNumber)
+            let currentStory = stories.find(story => story.get('starter') === currentStoryOwner.number);
+            let starter = currentStory.get('starter');
+            let updatedStory = await dynamoClient.updateStory({
+                roomCode: currentStory.get('roomCode'),
+                starter,
+                text: unescape(currentStory.get('text') ? currentStory.get('text') + player.lastResponse : player.lastResponse)
+                    .replace(/\+/gi,' ') + '\n'
+            });
+            console.log('updated story', updatedStory)
+            updatedStories.push(updatedStory)
+            let text = updatedStory.get('text');
+            let roundMessage = '';
+            let responseMessage = `📝${player.name} said:\n"${player.lastResponse}"\n\n`;
+            const speechText = emoji.replace(text, (emoji) => `${emoji.key}.`);
+            if (currentRound === playerCount * roundLimit) {
+                roundMessage = `The game is over! 🏁 Please wait while I generate audio for your story. 🎶`
+                await sendSMS(responseMessage + roundMessage, nextPlayer.number);
+                textToS3(text, starter, roomCode.toUpperCase());
+                toSpeech(speechText, starter, roomCode.toUpperCase());
+            }
+            else if (currentRound % playerCount === 0) {
+                roundMessage = `🏁Round ${currentRound} of ${roundLimit} is over!\n\n📝 Continue the story:`;
+                await sendSMS(responseMessage + roundMessage, nextPlayer.number);
+            } else {
+                await sendSMS(responseMessage + '\n\n📝 Continue the the story:', nextPlayer.number);
+            }
         }
     })
-    console.log('done looping players');
-    // sendSNS that round is over.
-    return sendSNS(roomCode, updatedStories);
+    return dynamoClient.updateRoom({
+        roomCode, startTime: room.get('startTime'), currentRound: { $add: 1 }, isReady: true
+    })
+    // console.log('done looping players');
+    // // sendSNS that round is over.
+    // return sendSNS(roomCode, updatedStories);
 }
 
 function range(start, stop, step) {
@@ -239,6 +262,29 @@ async function sendSNS(roomCode, updatedStories) {
                     return rej(err)
                 });
 
+    })
+}
+
+
+async function textToS3(text, starter, roomCode) {
+    console.log('doing text to s3 with', text, starter, roomCode)
+    const params = {
+        Bucket: process.env.S3_BUCKET,
+        Key: `${roomCode.toUpperCase()}/text/${starter}.txt`, // File name you want to save as in S3
+        Body: text
+    };
+
+    // Uploading files to the bucket
+    return new Promise((res, rej) => {
+        return s3.upload(params, function (err, data) {
+            if (err) {
+                console.log('error with uploading to s3', err)
+                return rej(err)
+            } else {
+                console.log(`File uploaded successfully. ${data.Location}`);
+                return res(data.Location);
+            }
+        });
     })
 }
 
